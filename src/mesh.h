@@ -95,7 +95,6 @@ public:
         // Restore polar manifold for cylinder
         triangulation.set_manifold(0, PolarManifold<2>(Point<2>()));
         
-        // Fix up position of left boundary
         for (auto cell : triangulation.active_cell_iterators()) {
             for (unsigned int v : cell->vertex_indices()) {
                 auto &vertex = cell->vertex(v);
