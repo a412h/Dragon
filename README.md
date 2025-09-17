@@ -20,7 +20,7 @@ The approach followed here is to transfer the entire computation on the GPU to o
 
 ## Remarks
 - Only the Euler equations are implemented  
-  only two dimension cases have been tested 
+  only two dimension cases have been tested  
   only the Euler Mach3 cylinder case has been tested  
 - Single GPU computation
 - Except for the generation of output files, libraries OpenMP, MPI and SIMD have been removed, as all computations are done on the GPU
