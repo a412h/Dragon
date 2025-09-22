@@ -200,7 +200,7 @@ public:
     //State<dim, Number>& get_current_state() { return d_U; }
     //State<dim, Number>& get_new_state() { return d_new_U; }
 
-    // Various coonstants
+    // Various constants
     static constexpr Number w_0 = Number(0);
     static constexpr Number w_0d75 = Number(0.75);
     static constexpr Number w_1 = Number(1);
@@ -212,8 +212,7 @@ public:
 
     Number execute_timestep(Number tau_max) {
         /*
-        Strang-ERK33CN time step
-        // Qdebug pour le moment erk33
+        ERK33 time step scheme
         */
         State<dim, Number> null_state = {nullptr, nullptr, nullptr, nullptr, nullptr};
         
