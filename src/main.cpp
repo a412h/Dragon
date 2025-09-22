@@ -211,8 +211,8 @@ int main() {
         // Output handler
         VTUOutput<dim> output(offline_data.dof_handler, config.basename);
 
-        // Instantiate GPU data structures (SoA)
-        std::cout << "\nTransferring data to GPU..." << std::endl;
+        // Instantiate data structures for device (SoA)
+        std::cout << "\nTransferring data to device..." << std::endl;
         MijMatrix<Number_cu> d_mass_matrix;
         MiMatrix<Number_cu> d_lumped_mass;
         MiMatrixInverse<Number_cu> d_lumped_mass_inv;
@@ -231,17 +231,17 @@ int main() {
         std::cout << "  Non-zeros in M_ij: " << nnz_mij << std::endl;
         std::cout << "  Non-zeros in C_ij: " << nnz_cij << std::endl;
 
-        // Transfer boundary data to GPU
+        // Transfer boundary data to device
         transfer_boundary_data_to_gpu<dim, Number, Number_cu>(
             offline_data, d_boundary_data, d_coupling_pairs, measure_of_omega);
         std::cout << "  Boundary DoFs: " << d_boundary_data.n_boundary_dofs << std::endl;
         std::cout << "  Internal coupling pairs: " << d_coupling_pairs.n_internal_pairs << std::endl;
         std::cout << "  Boundary coupling pairs: " << d_coupling_pairs.n_boundary_pairs << std::endl;
 
-        // Allocate state vectors on GPU
+        // Allocate state vectors on device
         allocate_state(d_U, n_dofs);
         
-        // Set initial conditions
+        // Set initial conditions on host
         std::vector<Number_cu> h_rho(n_dofs);
         std::vector<Number_cu> h_momentum_x(n_dofs);
         std::vector<Number_cu> h_momentum_y(n_dofs);
@@ -268,7 +268,7 @@ int main() {
             h_energy[i] = E;
         }
 
-        // Transfer initial conditions to GPU (SoA)
+        // Transfer initial conditions to device (SoA)
         CUDA_CHECK(cudaMemcpy(d_U.rho, h_rho.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
         CUDA_CHECK(cudaMemcpy(d_U.momentum_x, h_momentum_x.data(), n_dofs * sizeof(Number_cu), cudaMemcpyHostToDevice));
         if constexpr (dim >= 2) {

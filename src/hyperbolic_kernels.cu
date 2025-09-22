@@ -30,10 +30,10 @@ __device__ __forceinline__ void atomicMin_(double* addr, double value) {
 }
 
 // ============================================================================
-// KERNEL 1: Prepare stage
+// KERNEL 1: Prepare state
 // ============================================================================
 template<int dim, typename Number>
-__global__ void prepare_stage_kernel(
+__global__ void prepare_state_kernel(
     State<dim, Number> d_U,
     Number* d_pressure,
     Number* d_speed_of_sound,
@@ -67,7 +67,7 @@ __global__ void prepare_stage_kernel(
 // KERNEL 2: Compute off-diagonal d_ij and entropy viscosity alpha_i
 // ============================================================================
 template<int dim, typename Number>
-__global__ void compute_viscosity_kernel(
+__global__ void compute_off_diag_d_ij_and_alpha_i_kernel(
     const State<dim, Number> U,
     const Number* pressure,
     const Number* speed_of_sound,
@@ -253,7 +253,7 @@ __global__ void compute_diagonal_and_tau_kernel(
                 
                 if (j < tid) {
                     for (int jdx = mij_matrix.row_offsets[j]; 
-                         jdx < mij_matrix.row_offsets[j + 1]; ++jdx) {
+                        jdx < mij_matrix.row_offsets[j + 1]; ++jdx) {
                         if (mij_matrix.col_indices[jdx] == tid) {
                             dij_matrix[idx] = dij_matrix[jdx];
                             break;

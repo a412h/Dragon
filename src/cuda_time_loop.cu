@@ -38,16 +38,16 @@ void copy_state(State<dim, Number>& dst, const State<dim, Number>& src,
 }
 
 // ============================================================================
-// ERK33 Stage Executor
+// Stage Executor
 // ============================================================================
 template<int dim, typename Number>
-class ERK33StageExecutor {
+class StageExecutor {
 private:
     // Device pointers
     State<dim, Number> d_U;
-    State<dim, Number> d_U_n;
     State<dim, Number> d_temp_0;
     State<dim, Number> d_temp_1;
+    State<dim, Number> d_temp_2;
     State<dim, Number> d_new_U;
     Number* d_pressure;
     Number* d_speed_of_sound;
@@ -70,7 +70,7 @@ private:
     const BoundaryData<dim, Number>& d_boundary_data;
     const CouplingPairs& d_coupling_pairs;
     
-    // Parameters - now individual components for inflow
+    // Parameters - individual components for inflow
     Number inflow_rho;
     Number inflow_momentum_x;
     Number inflow_momentum_y;
@@ -100,11 +100,11 @@ private:
     const OfflineData<dim, double>& offline_data;
     
 public:
-    ERK33StageExecutor(
+    StageExecutor(
         State<dim, Number>& _d_U,
-        State<dim, Number>& _d_U_n,
         State<dim, Number>& _d_temp_0,
         State<dim, Number>& _d_temp_1,
+        State<dim, Number>& _d_temp_2,
         State<dim, Number>& _d_new_U,
         Number* _d_pressure,
         Number* _d_speed_of_sound,
@@ -135,7 +135,7 @@ public:
         int _nnz,
         const OfflineData<dim, double>& _offline_data,
         cudaStream_t _stream)
-        : d_U(_d_U), d_U_n(_d_U_n), d_temp_0(_d_temp_0), d_temp_1(_d_temp_1),
+        : d_U(_d_U), d_temp_0(_d_temp_0), d_temp_1(_d_temp_1), d_temp_2(_d_temp_2),
           d_new_U(_d_new_U), d_pressure(_d_pressure), d_speed_of_sound(_d_speed_of_sound),
           d_precomputed(_d_precomputed), d_alpha_i(_d_alpha_i), d_dij(_d_dij),
           d_pij(_d_pij), d_ri(_d_ri), d_bounds(_d_bounds), d_lij(_d_lij),
@@ -193,81 +193,98 @@ public:
         cudaFuncSetCacheConfig(compute_limiter_kernel<dim, Number>, cudaFuncCachePreferL1);
     }
     
-    ~ERK33StageExecutor() {
+    ~StageExecutor() {
         CUDA_CHECK(cudaFree(d_tau));
     }
     
-    State<dim, Number>& get_current_state() { return d_U; }
-    State<dim, Number>& get_new_state() { return d_new_U; }
-    
+    //State<dim, Number>& get_current_state() { return d_U; }
+    //State<dim, Number>& get_new_state() { return d_new_U; }
+
+    // Various coonstants
+    static constexpr Number w_0 = Number(0);
+    static constexpr Number w_0d75 = Number(0.75);
+    static constexpr Number w_1 = Number(1);
+    static constexpr Number w_2 = Number(2);
+    static constexpr Number w_2d25 = Number(2.25);
+    static constexpr Number w_m1 = Number(-1);
+    static constexpr Number w_m2 = Number(-2);
+    static constexpr Number efficiency_ = Number(3);  // Efficiency of scheme ERK33
+
     Number execute_timestep(Number tau_max) {
-        // Save initial state
-        copy_state(d_U_n, d_U, n_dofs, stream);
-        
-        // Stage 1: U^(1) = U^n + dt * F(U^n)
+        /*
+        Strang-ERK33CN time step
+        // Qdebug pour le moment erk33
+        */
         State<dim, Number> null_state = {nullptr, nullptr, nullptr, nullptr, nullptr};
-        Number tau = execute_stage(0, tau_max, null_state, null_state, 0, 0, Number(1));
         
-        // Store Stage 1 result
-        copy_state(d_temp_0, d_new_U, n_dofs, stream);
-        copy_state(d_U, d_temp_0, n_dofs, stream);
-        
-        // Stage 2: U^(2) = 3/4 * U^n + 1/4 * U^(1) + 1/4 * dt * F(U^(1))
-        execute_stage(1, tau, d_U_n, null_state, Number(-1), 0, Number(2));
-        
-        // Store Stage 2 result
-        copy_state(d_temp_1, d_new_U, n_dofs, stream);
-        copy_state(d_U, d_temp_1, n_dofs, stream);
-        
-        // Stage 3: U^(n+1) = 1/3 * U^n + 2/3 * U^(2) + 2/3 * dt * F(U^(2))
-        execute_stage(2, tau, d_U_n, d_temp_0, Number(0.75), Number(-2), Number(2.25));
-        
+        // I (step<0>)
+        prepare_state_hyperbolic(d_U);
+        Number tau = compute_step_hyperbolic(0, d_U, d_temp_0, null_state, null_state, w_0, w_0, w_1, tau_max / efficiency_);
+
+        // II (step<1>)
+        prepare_state_hyperbolic(d_temp_0);
+        compute_step_hyperbolic(1, d_temp_0, d_temp_1, d_U, null_state, w_m1, w_0, w_2, tau);
+
+        // III (step<2>)
+        prepare_state_hyperbolic(d_temp_1);
+        compute_step_hyperbolic(2, d_temp_1, d_temp_2, d_U, d_temp_0, w_0d75, w_m2, w_2d25, tau);
+
         // Update U for next iteration
-        copy_state(d_U, d_new_U, n_dofs, stream);
-        
+        copy_state(d_U, d_temp_2, n_dofs, stream);
+
         return tau;
     }
     
 private:
-    Number execute_stage(int stage, Number tau_max,
-                        State<dim, Number>& stage_U_0,
-                        State<dim, Number>& stage_U_1,
-                        Number weight_0, Number weight_1, Number weight_main) {
-        
-        // Step 1: Prepare (boundary conditions, pressure, precomputed)
-        prepare_stage_kernel<dim, Number><<<prepareConfig.blocksPerGrid, 
+
+    void prepare_state_hyperbolic(State<dim, Number>& state_vector)
+    {
+        // Prepare state (apply boundary conditions and precompute values)
+        prepare_state_kernel<dim, Number><<<prepareConfig.blocksPerGrid, 
                                             prepareConfig.threadsPerBlock, 
                                             0, stream>>>(
-            d_U, d_pressure, d_speed_of_sound, d_precomputed,
+            state_vector, d_pressure, d_speed_of_sound, d_precomputed,
             d_boundary_data, inflow_rho, inflow_momentum_x, inflow_momentum_y, 
-            inflow_momentum_z, inflow_energy, n_dofs);
-        
-        // Step 2: Compute viscosity coefficients
-        compute_viscosity_kernel<dim, Number><<<viscosityConfig.blocksPerGrid, 
-                                                viscosityConfig.threadsPerBlock, 
-                                                0, stream>>>(
-            d_U, d_pressure, d_speed_of_sound, d_alpha_i, d_dij,
+            inflow_momentum_z, inflow_energy, n_dofs);        
+    }
+    
+    Number compute_step_hyperbolic(int stage,
+        State<dim, Number>& d_old_state_vector,
+        State<dim, Number>& d_new_state_vector,
+        State<dim, Number>& d_stage_state_vector_0,
+        State<dim, Number>& d_stage_state_vector_1,
+        Number stage_weight_0,
+        Number stage_weight_1,
+        Number stage_weight_acc,
+        Number tau_max)
+    {
+        // Step 2: Compute off-diagonal d_ij and alpha_i terms
+        compute_off_diag_d_ij_and_alpha_i_kernel<dim, Number><<<viscosityConfig.blocksPerGrid, 
+                                                            viscosityConfig.threadsPerBlock, 
+                                                            0, stream>>>(
+            d_old_state_vector, d_pressure, d_speed_of_sound, d_alpha_i, d_dij,
             d_sparsity, d_cij, d_mi, d_precomputed,
             evc_factor, measure_of_omega, n_dofs);
 
+        // Step 3
         Number tau = tau_max;
         if (stage == 0) {
             // Step 3a: Complete boundaries
             int boundary_blocks = (d_coupling_pairs.n_boundary_pairs + 255) / 256;
             if (boundary_blocks > 0) {
                 complete_boundaries_kernel<dim, Number><<<boundary_blocks, 256, 0, stream>>>(
-                    d_U, d_dij, d_mij, d_cij, d_coupling_pairs);
+                    d_old_state_vector, d_dij, d_mij, d_cij, d_coupling_pairs);
             }
             
             // Step 3b: Compute diagonal and tau
             Number initial_tau = Number(1e20);
             CUDA_CHECK(cudaMemcpyAsync(d_tau, &initial_tau, sizeof(Number),
-                                       cudaMemcpyHostToDevice, stream));
+                                    cudaMemcpyHostToDevice, stream));
             
             compute_diagonal_and_tau_kernel<dim, Number><<<diagonalConfig.blocksPerGrid, 
-                                                           diagonalConfig.threadsPerBlock, 
-                                                           diagonalConfig.sharedMemorySize, 
-                                                           stream>>>(
+                                                        diagonalConfig.threadsPerBlock, 
+                                                        diagonalConfig.sharedMemorySize, 
+                                                        stream>>>(
                 d_dij, d_tau, d_mij, d_mi, cfl, n_dofs);
             
             CUDA_CHECK(cudaMemcpyAsync(&tau, d_tau, sizeof(Number),
@@ -275,36 +292,36 @@ private:
             CUDA_CHECK(cudaStreamSynchronize(stream));
             tau = fmin(tau, tau_max);
         }
-        
+
         // Step 4: Low-order update
-        low_order_update_kernel<dim, Number><<<lowOrderConfig.blocksPerGrid, 
-                                               lowOrderConfig.threadsPerBlock, 
-                                               0, stream>>>(
-            d_U, d_new_U, d_pressure, d_alpha_i, d_dij, d_pij, d_ri, d_bounds,
+        low_order_update_kernel<dim, Number><<<lowOrderConfig.blocksPerGrid,
+                                            lowOrderConfig.threadsPerBlock, 
+                                            0, stream>>>(
+            d_old_state_vector, d_new_state_vector, d_pressure, d_alpha_i, d_dij, d_pij, d_ri, d_bounds,
             d_sparsity, d_mij, d_mi, d_mi_inv, d_cij, d_precomputed,
-            tau, measure_of_omega, stage_U_0, stage_U_1,
-            weight_0, weight_1, weight_main, stage, n_dofs);
-        
+            tau, measure_of_omega, d_stage_state_vector_0, d_stage_state_vector_1,
+            stage_weight_0, stage_weight_1, stage_weight_acc, stage, n_dofs);
+
         // Step 5: Compute limiter coefficients
         compute_limiter_kernel<dim, Number><<<limiterConfig.blocksPerGrid, 
-                                              limiterConfig.threadsPerBlock, 
-                                              0, stream>>>(
-            d_new_U, d_pij, d_ri, d_lij, d_bounds,
+                                            limiterConfig.threadsPerBlock, 
+                                            0, stream>>>(
+            d_new_state_vector, d_pij, d_ri, d_lij, d_bounds,
             d_sparsity, d_mij, d_mi_inv, tau, n_dofs);
 
         // Step 6: High-order update iteration 1
         high_order_update_iter1_kernel<dim, Number><<<highOrderConfig.blocksPerGrid, 
-                                                      highOrderConfig.threadsPerBlock, 
-                                                      0, stream>>>(
-            d_new_U, d_pij, d_lij, d_lij_next, d_bounds, d_sparsity, n_dofs);
+                                                    highOrderConfig.threadsPerBlock, 
+                                                0, stream>>>(
+            d_new_state_vector, d_pij, d_lij, d_lij_next, d_bounds, d_sparsity, n_dofs);
 
         std::swap(d_lij, d_lij_next);
-        
+
         // Step 7: High-order update iteration 2
         high_order_update_iter2_kernel<dim, Number><<<highOrderConfig.blocksPerGrid, 
-                                                      highOrderConfig.threadsPerBlock, 
-                                                      0, stream>>>(
-            d_new_U, d_pij, d_lij, d_sparsity, n_dofs);
+                                                    highOrderConfig.threadsPerBlock, 
+                                                    0, stream>>>(
+            d_new_state_vector, d_pij, d_lij, d_sparsity, n_dofs);
 
         return tau;
     }
@@ -340,13 +357,13 @@ Number_cu cuda_time_loop(
     AsyncVTUWriter<dim> async_writer(output_handler);
     
     // Allocate device working arrays
-    State<dim, Number_cu> d_U_n, d_temp_0, d_temp_1, d_new_U;
+    State<dim, Number_cu> d_temp_0, d_temp_1, d_temp_2, d_new_U;
     Pij<dim, Number_cu> d_pij;
     Ri<dim, Number_cu> d_ri;
     
-    allocate_state(d_U_n, n_dofs);
     allocate_state(d_temp_0, n_dofs);
     allocate_state(d_temp_1, n_dofs);
+    allocate_state(d_temp_2, n_dofs);
     allocate_state(d_new_U, n_dofs);
     allocate_pij(d_pij, nnz_mij);
     allocate_ri(d_ri, n_dofs);
@@ -393,8 +410,8 @@ Number_cu cuda_time_loop(
     CUDA_CHECK(cudaStreamSynchronize(compute_stream));
     
     // Create hyperbolic executor
-    ERK33StageExecutor<dim, Number_cu> hyperbolic_executor(
-        d_U, d_U_n, d_temp_0, d_temp_1, d_new_U,
+    StageExecutor<dim, Number_cu> hyperbolic_executor(
+        d_U, d_temp_0, d_temp_1, d_temp_2, d_new_U,
         d_pressure, d_speed_of_sound, d_precomputed, d_alpha_i,
         d_dij, d_pij, d_ri, d_bounds, d_lij, d_lij_next,
         d_mij_matrix, d_mi_matrix, d_mi_inv_matrix, d_cij_matrix, d_sparsity,
@@ -601,9 +618,9 @@ Number_cu cuda_time_loop(
     }
     
     // Cleanup
-    free_state(d_U_n);
     free_state(d_temp_0);
     free_state(d_temp_1);
+    free_state(d_temp_2);
     free_state(d_new_U);
     free_pij(d_pij);
     free_ri(d_ri);

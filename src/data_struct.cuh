@@ -1,3 +1,7 @@
+/*
+HSSDP approach
+*/
+
 #ifndef DATA_STRUCT_CUH
 #define DATA_STRUCT_CUH
 
@@ -12,7 +16,7 @@
 // Macro for error checking
 #define CUDA_CHECK(call) { cudaError_t error = call; if (error != cudaSuccess) { fprintf(stderr, "CUDA error at %s:%d - %s\n", __FILE__, __LINE__, cudaGetErrorString(error)); exit(1);} }
 
-// NEW: Structure of Arrays for State
+// Structure of arrays for State
 template<int dim, typename Number>
 struct State {
     Number* rho;           // Density array [n_dofs]
@@ -175,7 +179,8 @@ struct PrimitiveType {
     Number data[riemann_data_size];
 };
 
-// Flux implementation remains the same
+// Flux implementation
+
 template<int dim, typename Number>
 __host__ __device__ Number& Flux<dim, Number>::operator()(int component, int dimension) {
     return F[component * dim + dimension];
@@ -186,7 +191,9 @@ __host__ __device__ const Number& Flux<dim, Number>::operator()(int component, i
     return F[component * dim + dimension];
 }
 
-// Helper functions for allocation with SoA
+
+// Functions for allocation / deallocation on device (SoA)
+
 template<int dim, typename Number>
 void allocate_state(State<dim, Number>& state, int n_dofs) {
     CUDA_CHECK(cudaMalloc(&state.rho, n_dofs * sizeof(Number)));
