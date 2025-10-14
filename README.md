@@ -20,8 +20,7 @@ The approach followed here is to transfer the entire computation on the GPU to o
 
 ## Remarks
 - Only the Euler equations are implemented  
-  only two dimension cases have been tested  
-  only the Euler Mach3 cylinder case has been tested  
+- Euler Mach3 cylinder cases in 2d and 3d have been tested  
 - Single GPU computation
 - Except for the generation of output files, libraries OpenMP, MPI and SIMD have been removed, as all computations are done on the GPU
 
@@ -45,6 +44,7 @@ make
 ./euler_cuda
 ```
 
-### This is an extract of the transcient simulation of the test case Euler cylinder 2d Mach3:
+### These are extracts of transcient simulations of the test cases Euler cylinder Mach3, resp. in 2d and 3d:
 
 ![Cylinder 2D](euler_mach3_2d_8.png)
+![Cylinder 3D](euler_mach3_3d_5.png)

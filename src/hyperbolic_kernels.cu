@@ -382,7 +382,7 @@ __global__ void low_order_update_kernel(
     LimiterType limiter;
     limiter.reset(U_i_array, pressure_i_local, precomputed[i * 2]);
     
-    // Process neighbors with
+    // Process neighbors
     for (int idx = row_start; idx < row_end; ++idx) {
         const int j = sparsity.col_indices[idx];
         

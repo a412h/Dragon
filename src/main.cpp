@@ -7,7 +7,7 @@
 // Parameters
 using Number = double;      // Precision on CPU
 using Number_cu = float;    // Precision on GPU
-constexpr int dim = 2;      // Dimension (2 or 3)
+constexpr int dim = 3;      // Dimension (2 or 3)
 
 // Transfer function offline data to GPU
 template<int dim, typename Number, typename Number_cu>
@@ -179,7 +179,8 @@ int main() {
     try {
         // Read configuration
         Configuration config;
-        config.read_parameters("../test_cases/euler-mach3-cylinder-2d.prm");
+        //config.read_parameters("../test_cases/euler-mach3-cylinder-2d.prm");  // 2d case
+        config.read_parameters("../test_cases/euler-mach3-cylinder-3d.prm");  // 3d case
         //config.final_time = 5; 
 
         std::cout << "=== GPU-accelerated Euler solver ===" << std::endl;
@@ -194,13 +195,8 @@ int main() {
             
         // Create mesh
         dealii::Triangulation<dim> triangulation;
-        if constexpr (dim == 2) {
-            MeshGenerator::create_cylinder_mesh(triangulation, config);
-        } else {
-            std::cerr << "Error: 3D cases not implemented" << std::endl;
-            return 1;
-        }
-        std::cout << "Mesh: " << triangulation.n_active_cells() << " cells, "
+        MeshGenerator::create_cylinder_mesh(triangulation, config);
+        std::cout << "Dimension: " << dim << ", mesh: " << triangulation.n_active_cells() << " cells, "
                   << triangulation.n_vertices() << " vertices" << std::endl;
         
         // Compute offline data
@@ -252,19 +248,20 @@ int main() {
             const Number_cu rho = static_cast<Number_cu>(config.primitive_state[0]);
             const Number_cu u = static_cast<Number_cu>(config.primitive_state[1]);
             const Number_cu v = Number_cu(0);
+            const Number_cu w = (dim == 3) ? Number_cu(0) : Number_cu(0);
             const Number_cu p = static_cast<Number_cu>(config.primitive_state[2]);
             const Number_cu gamma = static_cast<Number_cu>(config.gamma);
             
             Number_cu kinetic_energy = Number_cu(0.5) * rho * (u * u + v * v);
+            if constexpr (dim == 3) {
+                kinetic_energy += Number_cu(0.5) * rho * w * w;
+            }
             const Number_cu E = p / (gamma - Number_cu(1)) + kinetic_energy;
 
             h_rho[i] = rho;
             h_momentum_x[i] = rho * u;
             h_momentum_y[i] = rho * v;
-            if constexpr (dim == 3) {
-                const Number_cu w = Number_cu(0);
-                h_momentum_z[i] = rho * w;
-            }
+            if constexpr (dim == 3) h_momentum_z[i] = rho * w;
             h_energy[i] = E;
         }
 

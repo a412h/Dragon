@@ -389,15 +389,20 @@ Number_cu cuda_time_loop(
     const Number_cu rho_inf = static_cast<Number_cu>(config.primitive_state[0]);
     const Number_cu u_inf = static_cast<Number_cu>(config.primitive_state[1]);
     const Number_cu v_inf = Number_cu(0);
+    const Number_cu w_inf = (dim == 3) ? Number_cu(0) : Number_cu(0);
     const Number_cu p_inf = static_cast<Number_cu>(config.primitive_state[2]);
     const Number_cu gamma = static_cast<Number_cu>(config.gamma);
-    const Number_cu E_inf = p_inf / (gamma - Number_cu(1)) + 
-                            Number_cu(0.5) * rho_inf * (u_inf * u_inf + v_inf * v_inf);
+    Number_cu E_inf = p_inf / (gamma - Number_cu(1)) + 
+                      Number_cu(0.5) * rho_inf * (u_inf * u_inf + v_inf * v_inf);
+    if constexpr (dim == 3) {
+        E_inf += Number_cu(0.5) * rho_inf * w_inf * w_inf;
+    }
+
     
     Number_cu inflow_rho = rho_inf;
     Number_cu inflow_momentum_x = rho_inf * u_inf;
     Number_cu inflow_momentum_y = rho_inf * v_inf;
-    Number_cu inflow_momentum_z = (dim == 3) ? Number_cu(0) : Number_cu(0);
+    Number_cu inflow_momentum_z = (dim == 3) ? (rho_inf * w_inf) : Number_cu(0);
     Number_cu inflow_energy = E_inf;
     
     // Initial state preparation
